@@ -12,6 +12,7 @@
 
 from numpy import sqrt, genfromtxt, hstack, ones, hstack, array, diag
 from numpy import setdiff1d, arange
+from scipy.stats import probplot
 from numpy.linalg import inv
 import pdb
 import matplotlib.pyplot as plt
@@ -25,6 +26,7 @@ class MLR:
 		self.betaHat = -1
 		self.partialRegressionSwitches = []
 		self.partialRegressions = []
+		self.fTest = []
 
 	def parseData(self,coeffSwitch,rowLabelCol,yCol):
 		'''!
@@ -143,6 +145,18 @@ class MLR:
 		r = e/(sigmaHat*sqrt(1-h))
 		self.r = r
 
+	def runFTest(self,partialRegression):
+		'''!
+		RAE eqn 3.28
+		'''
+		SSERM = partialRegression.SSE
+		SSEFM = self.SSE
+		p = self.X.shape[1]-1
+		k = partialRegression.X.shape[1]
+		n = self.Y.shape[0]
+		F = (SSERM - SSEFM)/(SSEFM)*(n-p-1)/(p+1-k)
+		self.fTest.append(F)
+
 
 	def regress(self,**kwargs):
 		try:
@@ -193,6 +207,7 @@ class MLR:
 			)
 		self.partialRegressionSwitches.append(coeffSwitch)
 		self.partialRegressions.append(partialRegression)
+		self.runFTest(partialRegression)
 
 	def scatterPlot(self,regression):
 		if regression.X.shape[1] != 2:
@@ -204,6 +219,7 @@ class MLR:
 		plt.xlabel(regression.dataNames[0])
 		plt.title(regression.yName + \
 			' versus ' + regression.dataNames[0])
+		plt.legend()
 
 
 
@@ -227,9 +243,12 @@ class MLR:
 			self.X[:,2], 
 			self.Yhat.T[0], 
 			color='r',label='Fitted Data')
+		ax.set_title(self.yName + ' versus ' + \
+			self.dataNames[0] + ' and ' + self.dataNames[1])
 		ax.set_xlabel(self.dataNames[0])
 		ax.set_ylabel(self.dataNames[1])
 		ax.set_zlabel(self.yName)
+		ax.legend()
 
 	def plotMatrix(self):
 		fullData = hstack([self.Y,self.X[:,1:]])
@@ -273,7 +292,7 @@ class MLR:
 				axes[i,j].set_ylabel('Standardized Residuals')
 	def plotResidualsVFitted(self):
 		Yhat = self.Yhat
-		r = self.r
+		r = self.r.T[0]
 		plt.figure()
 		plt.plot(Yhat,r,'.')
 		plt.title('Standardized (Studentized) Residuals versus Fitted Values')
@@ -281,12 +300,34 @@ class MLR:
 		plt.ylabel('Standardized Residuals')
 
 	def plotStandardizedResiduals(self):
-		r = self.r
+		r = self.r.T[0]
 		plt.figure()
 		plt.plot(r,'.')
 		plt.title('Standardized (Studentized) Residuals versus Observation Index')
 		plt.xlabel('Index')
 		plt.ylabel('Standardized Residual')
+
+	def plotNormalProb(self):
+		r = self.r.T[0]
+		plt.figure()
+		probplot(r.T,plot=plt)
+
+	def predict(self,x0):
+		yMuHat = x0.T.dot(self.betaHat)[0,0]
+		seYHat = self.sigmaHat*sqrt(
+				1 + x0.T.dot(inv(self.X.T.dot(self.X)).dot(x0)
+				)
+			)[0,0]
+		seMuHat = self.sigmaHat*sqrt(
+				x0.T.dot(inv(self.X.T.dot(self.X)).dot(x0)
+				)
+			)[0,0]
+		print("yHat/muHat: " + str(yMuHat))
+		print("se(yHat): " + str(yMuHat))
+		print("se(muHat): " + str(seYHat))
+
+		return (yMuHat, seYHat, seMuHat)
+
 def bar(X):
 	'''!
 	It's a mean, duh. Just doing this for pedagogical reasons.
