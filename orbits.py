@@ -1222,7 +1222,7 @@ def lambert(X_0, X_f, dt_0, **kwargs):
 			c2 = 1./2.
 			c3 = 1./6.
 	
-	if i == 200: print("max iterations reached")
+	if i == 1000: print("max iterations reached")
 
 	f = 1 - y/r0
 	g_dot = 1 - y/rf
