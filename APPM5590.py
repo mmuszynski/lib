@@ -11,7 +11,7 @@
 ###############################################################################
 
 from numpy import sqrt, genfromtxt, hstack, ones, hstack, array, diag
-from numpy import setdiff1d, arange
+from numpy import setdiff1d, arange, unique, empty
 from scipy.stats import probplot
 from numpy.linalg import inv
 import pdb
@@ -157,6 +157,53 @@ class MLR:
 		F = (SSERM - SSEFM)/(SSEFM)*(n-p-1)/(p+1-k)
 		self.fTest.append(F)
 
+	def separateCatVars(self,catVars,**kwargs):
+		if catVars == -1: return
+		try:
+			keepVals = kwargs['keepVals']
+		except:
+			keepVals = 0
+		n = self.X.shape[0]
+		m = self.X.shape[1]
+		newX = ones((n,1))
+
+		###############################################################
+		#
+		# note one why it's m-1. e.g.: If we have 3 categorical values,
+		#  we only need 2 variables to track them all. If we know
+		#  the values of v1 and v2, the value of v3 is determined.
+		#  reducing the number of variables by 1 allows us to keep one
+		#  more degree of freedom. We don't care which one we keep, so
+		#  the code just choses to throw out the last one by iterating
+		#  though one i too few to get them all.
+		#
+		###############################################################
+
+		for i in range(1,m):
+
+			if i in catVars:
+				oldCol = self.X[:,i,None]
+				uniqVals = unique(oldCol)
+				newDataNames = []
+				for j in uniqVals[0:-1]:
+					#need to call newCol explicitly as an array
+					#so we don't change things passing by reference
+					newCol = array(oldCol)
+					newCol[newCol != j] = 0
+					# newDataNames = hstack([
+					# 	newDataNames,self.dataNames[j] + str(j)
+					# 	])
+
+					#normalize values if we decided not to keep them
+					#this is the nominal behavior
+					if keepVals == 0: newCol /= j
+					newX = hstack([newX,newCol])
+					# newDataNames = hstack([newDataNames,self.dataNames[j]])
+			else:
+				newX = hstack([newX,self.X[:,i,None]])
+		self.X = newX
+		# import pdb
+		# pdb.set_trace()
 
 	def regress(self,**kwargs):
 		try:
@@ -171,8 +218,14 @@ class MLR:
 			yCol = kwargs['yCol']
 		except:
 			yCol = 0
+		try:
+			catVars = kwargs['catVars']
+		except:
+			catVars = -1
 
 		self.parseData(coeffSwitch,rowLabelCol,yCol)
+
+		self.separateCatVars(catVars)
 		self.calculateBetaHat()
 		self.calculateYhat()
 		self.calculateHMatrix()
@@ -220,7 +273,6 @@ class MLR:
 		plt.title(regression.yName + \
 			' versus ' + regression.dataNames[0])
 		plt.legend()
-
 
 
 	def scatterAllPartials(self):
@@ -285,11 +337,18 @@ class MLR:
 			dims[0], dims[1], sharex=False, sharey=True)
 		plt.suptitle('Standardized (Studentized) Residuals versus Predictor Variables')
 		plt.subplots_adjust(hspace=0.5)
-		for i in range(0,dims[0]):
-			for j in range(0,dims[1]):
-				axes[i,j].plot(X[:,i*dims[1]+j],r,'.')
-				axes[i,j].set_xlabel(self.dataNames[i*dims[1]+j])
-				axes[i,j].set_ylabel('Standardized Residuals')
+		if dims[1] == 1:
+			for i in range(0,dims[0]):
+					axes[i].plot(X[:,i],r,'.')
+					axes[i].set_xlabel(self.dataNames[i])
+					axes[i].set_ylabel('Standardized Residuals')
+		else:		
+			for i in range(0,dims[0]):
+				for j in range(0,dims[1]):
+					axes[i,j].plot(X[:,i*dims[1]+j],r,'.')
+					axes[i,j].set_xlabel(self.dataNames[i*dims[1]+j])
+					axes[i,j].set_ylabel('Standardized Residuals')
+
 	def plotResidualsVFitted(self):
 		Yhat = self.Yhat
 		r = self.r.T[0]
