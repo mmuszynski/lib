@@ -11,7 +11,9 @@
 ###############################################################################
 
 from numpy import sqrt, genfromtxt, hstack, ones, hstack, array, diag
-from numpy import setdiff1d, arange, unique, empty
+from numpy import setdiff1d, arange, unique, empty, delete, vstack
+from numpy import savetxt
+from os import remove
 from scipy.stats import probplot
 from numpy.linalg import inv
 import pdb
@@ -28,16 +30,17 @@ class MLR:
 		self.partialRegressions = []
 		self.fTest = []
 
-	def parseData(self,coeffSwitch,rowLabelCol,yCol):
+	def parseData(self,ignoreVars,rowLabelCol,yCol):
 		'''!
 		Note: rowLabelCol is a switch to tell the method whether or not
 		to use the first column as labels for the rows. Sometimes it's
 		used as part of an index.
 		'''
+
+
 		data = genfromtxt(self.dataFile)
 		self.rawData = data
-		tossTheseColumns = hstack(
-			[array([rowLabelCol,yCol]),coeffSwitch])
+		tossTheseColumns = hstack([array([rowLabelCol,yCol]),ignoreVars])
 		allColumns = arange(data.shape[1])
 		allRows = arange(data.shape[0])
 		keepTheseColumns = setdiff1d(allColumns,tossTheseColumns)
@@ -51,10 +54,11 @@ class MLR:
 		self.Y = data[keepTheseRows,yCol,None]
 		self.X = hstack([ones(len(keepTheseRows)).reshape(-1,1),
 					data[keepTheseRows][:,keepTheseColumns]])
-		if rowLabelCol != 1:
-			self.rowNames = data[:,rowLabelCol,None]
+		if rowLabelCol != -1:
+			self.rowLabel = data[:,rowLabelCol,None][1:]
+			self.rowLabelName = genfromtxt(self.dataFile,dtype=str)[0,0]
 		else:
-			rowLabelCol = -1
+			self.rowLabel = -1
 
 	def calculateBetaHat(self):
 		'''!
@@ -145,17 +149,32 @@ class MLR:
 		r = e/(sigmaHat*sqrt(1-h))
 		self.r = r
 
-	def runFTest(self,partialRegression):
+	def runFTest(self,partialRegression,**kwargs):
 		'''!
 		RAE eqn 3.28
 		'''
+		try:
+			saveResult = kwargs['saveResult']
+		except:
+			saveResult = 1
+
 		SSERM = partialRegression.SSE
 		SSEFM = self.SSE
 		p = self.X.shape[1]-1
 		k = partialRegression.X.shape[1]
 		n = self.Y.shape[0]
 		F = (SSERM - SSEFM)/(SSEFM)*(n-p-1)/(p+1-k)
-		self.fTest.append(F)
+		if saveResult:
+			self.fTest.append(F)
+		else:
+			return {
+				'SSERM': SSERM,
+				'SSEFM': SSEFM,
+				'p': p,
+				'k': k,
+				'n': n,
+				'F': F			
+				}
 
 	def separateCatVars(self,catVars,**kwargs):
 		if catVars == -1: return
@@ -166,6 +185,7 @@ class MLR:
 		n = self.X.shape[0]
 		m = self.X.shape[1]
 		newX = ones((n,1))
+		newDataNames = []
 
 		###############################################################
 		#
@@ -184,7 +204,6 @@ class MLR:
 			if i in catVars:
 				oldCol = self.X[:,i,None]
 				uniqVals = unique(oldCol)
-				newDataNames = []
 				for j in uniqVals[0:-1]:
 					#need to call newCol explicitly as an array
 					#so we don't change things passing by reference
@@ -198,18 +217,48 @@ class MLR:
 					#this is the nominal behavior
 					if keepVals == 0: newCol /= j
 					newX = hstack([newX,newCol])
-					# newDataNames = hstack([newDataNames,self.dataNames[j]])
+					newDataNames = hstack([
+						newDataNames,
+						self.dataNames[i-1][0] + str(int(j))
+						])
 			else:
 				newX = hstack([newX,self.X[:,i,None]])
+				newDataNames = hstack([newDataNames,self.dataNames[i-1]])
+
 		self.X = newX
-		# import pdb
-		# pdb.set_trace()
+		self.dataNames = newDataNames
+
+
+	def createInteractionTerms(self,intVars,**kwargs):
+		if intVars == -1: return
+		try:
+			keepVals = kwargs['keepVals']
+		except:
+			keepVals = 0
+
+		for interaction in intVars:
+			self.X = hstack([
+				self.X,
+				self.X[:,interaction[0],None]*\
+				self.X[:,interaction[1],None] 
+				])
+			self.dataNames = hstack([
+				self.dataNames,
+				self.dataNames[interaction[0]-1] + '*' + \
+				self.dataNames[interaction[1]-1]
+				])
+
+	def removeBadObservations(self,badObs):
+		if badObs == -1: return
+		badObs = array(badObs)
+		self.X = delete(self.X,badObs,0)
+		self.Y = delete(self.Y,badObs,0)
 
 	def regress(self,**kwargs):
 		try:
-			coeffSwitch = kwargs['coeffSwitch']
+			ignoreVars = kwargs['ignoreVars']
 		except:
-			coeffSwitch = array([-1])
+			ignoreVars = array([-1])
 		try:
 			rowLabelCol = kwargs['rowLabelCol']
 		except:
@@ -222,10 +271,19 @@ class MLR:
 			catVars = kwargs['catVars']
 		except:
 			catVars = -1
+		try:
+			intVars = kwargs['intVars']
+		except:
+			intVars = -1
+		try:
+			badObs = kwargs['badObs']
+		except:
+			badObs = -1
 
-		self.parseData(coeffSwitch,rowLabelCol,yCol)
-
+		self.parseData(ignoreVars,rowLabelCol,yCol)
+		self.removeBadObservations(badObs)
 		self.separateCatVars(catVars)
+		self.createInteractionTerms(intVars)
 		self.calculateBetaHat()
 		self.calculateYhat()
 		self.calculateHMatrix()
@@ -240,25 +298,32 @@ class MLR:
 		self.calculateTTest()
 		self.calculateStudentizedResiduals()
 
-	def partialRegress(self,coeffSwitch,**kwargs):
-		try:
-			rowLabelCol = kwargs['rowLabelCol']
-		except:
-			rowLabelCol = -1
+	def partialRegress(self,ignoreVars):
 
-		try:
-			yCol = kwargs['yCol']
-		except:
+		if self.rowLabel == -1:
+			header = hstack([self.yName,self.dataNames])
+			data = hstack([self.Y,self.X[:,1:]]) 
+			rowLabelCol = -1
 			yCol = 0
+		else:
+			header = hstack([self.rowLabelName,self.yName,self.dataNames])
+			data = hstack([self.rowLabel,self.Y,self.X[:,1:]]) 
+			rowLabelCol = 0
+			yCol = 1
+		allTogetherNow = vstack([header,data])
+		savetxt('/tmp/tmp.txt',allTogetherNow,fmt='%s',delimiter="\t")
+		#construct a temporary data file to leverage the way the
+		#regress method collects data.
 
 		partialRegression = MLR()
-		partialRegression.dataFile = self.dataFile
+		partialRegression.dataFile = '/tmp/tmp.txt'
 		partialRegression.regress(
-			coeffSwitch=coeffSwitch,
+			ignoreVars=ignoreVars,
 			rowLabelCol=rowLabelCol,
 			yCol=yCol
 			)
-		self.partialRegressionSwitches.append(coeffSwitch)
+		remove('/tmp/tmp.txt')
+		self.partialRegressionSwitches.append(ignoreVars)
 		self.partialRegressions.append(partialRegression)
 		self.runFTest(partialRegression)
 
@@ -266,6 +331,7 @@ class MLR:
 		if regression.X.shape[1] != 2:
 			print('Error. Scatter only available for 2D data.')
 			return
+		plt.figure()
 		plt.plot(regression.X[:,1],regression.Y,'.',label='Raw Data')
 		plt.plot(regression.X[:,1],regression.Yhat,'r',label='Fitted Data')
 		plt.ylabel(regression.yName)
