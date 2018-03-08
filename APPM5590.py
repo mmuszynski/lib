@@ -12,7 +12,7 @@
 
 from numpy import sqrt, genfromtxt, hstack, ones, hstack, array, diag
 from numpy import setdiff1d, arange, unique, empty, delete, vstack
-from numpy import savetxt
+from numpy import savetxt, log, set_printoptions
 from os import remove
 from scipy.stats import probplot
 from numpy.linalg import inv
@@ -29,6 +29,7 @@ class MLR:
 		self.partialRegressionSwitches = []
 		self.partialRegressions = []
 		self.fTest = []
+		self.fDOF = []
 
 	def parseData(self,ignoreVars,rowLabelCol,yCol):
 		'''!
@@ -160,12 +161,17 @@ class MLR:
 
 		SSERM = partialRegression.SSE
 		SSEFM = self.SSE
+		#this is correct. Full model has p+1 parameters, and
+		#reduced model has k parameters. Therefore p == k if
+		#we reduce the model by one parameter
 		p = self.X.shape[1]-1
 		k = partialRegression.X.shape[1]
 		n = self.Y.shape[0]
 		F = (SSERM - SSEFM)/(SSEFM)*(n-p-1)/(p+1-k)
+		dof = (p+1-k,n-p-k)
 		if saveResult:
 			self.fTest.append(F)
+			self.fDOF.append(dof)
 		else:
 			return {
 				'SSERM': SSERM,
@@ -173,7 +179,8 @@ class MLR:
 				'p': p,
 				'k': k,
 				'n': n,
-				'F': F			
+				'F': F,
+				'dof': 	dof
 				}
 
 	def separateCatVars(self,catVars,**kwargs):
@@ -208,14 +215,15 @@ class MLR:
 					#need to call newCol explicitly as an array
 					#so we don't change things passing by reference
 					newCol = array(oldCol)
-					newCol[newCol != j] = 0
-					# newDataNames = hstack([
-					# 	newDataNames,self.dataNames[j] + str(j)
-					# 	])
-
+					yesInd = newCol == j
+					noInd = newCol != j
+					newCol[noInd] = 0
 					#normalize values if we decided not to keep them
 					#this is the nominal behavior
-					if keepVals == 0: newCol /= j
+					if keepVals == 0:
+						newCol[yesInd] = 1
+
+					
 					newX = hstack([newX,newCol])
 					newDataNames = hstack([
 						newDataNames,
@@ -254,6 +262,12 @@ class MLR:
 		self.X = delete(self.X,badObs,0)
 		self.Y = delete(self.Y,badObs,0)
 
+	def transformY(self,yTransform):
+		self.yTransform = yTransform
+		if yTransform == 'ln':
+			self.Y = log(self.Y)
+			self.yName = 'ln' + self.yName
+
 	def regress(self,**kwargs):
 		try:
 			ignoreVars = kwargs['ignoreVars']
@@ -279,11 +293,16 @@ class MLR:
 			badObs = kwargs['badObs']
 		except:
 			badObs = -1
+		try:
+			yTransform = kwargs['yTransform']
+		except:
+			yTransform = -1
 
 		self.parseData(ignoreVars,rowLabelCol,yCol)
 		self.removeBadObservations(badObs)
 		self.separateCatVars(catVars)
 		self.createInteractionTerms(intVars)
+		self.transformY(yTransform)
 		self.calculateBetaHat()
 		self.calculateYhat()
 		self.calculateHMatrix()
@@ -300,7 +319,12 @@ class MLR:
 
 	def partialRegress(self,ignoreVars):
 
-		if self.rowLabel == -1:
+		try: 
+			rowLabelCheck = (self.rowLabel == -1).all()
+		except:
+			rowLabelCheck = self.rowLabel == -1
+
+		if rowLabelCheck:
 			header = hstack([self.yName,self.dataNames])
 			data = hstack([self.Y,self.X[:,1:]]) 
 			rowLabelCol = -1
@@ -407,13 +431,13 @@ class MLR:
 			for i in range(0,dims[0]):
 					axes[i].plot(X[:,i],r,'.')
 					axes[i].set_xlabel(self.dataNames[i])
-					axes[i].set_ylabel('Standardized Residuals')
+					axes[i].set_ylabel('Residuals')
 		else:		
 			for i in range(0,dims[0]):
 				for j in range(0,dims[1]):
 					axes[i,j].plot(X[:,i*dims[1]+j],r,'.')
 					axes[i,j].set_xlabel(self.dataNames[i*dims[1]+j])
-					axes[i,j].set_ylabel('Standardized Residuals')
+					axes[i,j].set_ylabel('Residuals')
 
 	def plotResidualsVFitted(self):
 		Yhat = self.Yhat
@@ -422,7 +446,7 @@ class MLR:
 		plt.plot(Yhat,r,'.')
 		plt.title('Standardized (Studentized) Residuals versus Fitted Values')
 		plt.xlabel('Fitted Values')
-		plt.ylabel('Standardized Residuals')
+		plt.ylabel('Residuals')
 
 	def plotStandardizedResiduals(self):
 		r = self.r.T[0]
@@ -430,7 +454,7 @@ class MLR:
 		plt.plot(r,'.')
 		plt.title('Standardized (Studentized) Residuals versus Observation Index')
 		plt.xlabel('Index')
-		plt.ylabel('Standardized Residual')
+		plt.ylabel('Residual')
 
 	def plotNormalProb(self):
 		r = self.r.T[0]
@@ -452,6 +476,37 @@ class MLR:
 		print("se(muHat): " + str(seYHat))
 
 		return (yMuHat, seYHat, seMuHat)
+
+	def latexTable(self,**kwargs):
+		print("\\begin{table}[H]")
+		print("\centering")
+		print("\\begin{tabular}{|c|c|c|c|}")
+		print("\hline")
+		print("Predictor & $\hat{\\beta}_i$ & se($\hat{\\beta}_i$) & t-test \\\\")
+		print("\\hline")
+		names = hstack(["Constant",self.dataNames])
+		for i in range(0,len(self.betaHat)):
+			print(
+				names[i] + " & " + \
+				str("%.3E" % self.betaHat[i][0]) + " & " + \
+				str("%.3E" % self.seBetaJ[i][0]) + \
+				" & " + \
+				str("%.3E" % self.tTest[i][0]) + " \\\\"
+				)
+		print("\hline")
+		print(
+			"$n=$" + str(len(self.Y)) + " & " + \
+			"$R^2=$" + str("%.3f" % self.rSq) + " & " + \
+			"$\\hat{\\sigma}$=" + str("%.3f" % self.sigmaHat) + " & " + \
+			"d.f.=" + str(
+				len(self.Y)-len(self.betaHat)
+				) + " & "
+			)
+		print("\hline")
+		print("\end{tabular}")
+		print("\caption{My caption}")
+		print("\label{my-label}")
+		print("\end{table}")
 
 def bar(X):
 	'''!
