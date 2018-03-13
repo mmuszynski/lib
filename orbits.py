@@ -24,6 +24,14 @@
 # D-
 ###############################################################################
 
+from numpy import arctan2, dot, sqrt, sin, cos, sinh, cosh, pi, zeros
+from numpy import sqrt, linspace, argmin, rad2deg, nan, array, deg2rad
+from numpy import hstack, vstack, empty, einsum, ones, logical_and
+from util import rx, rz
+
+from numpy.linalg import norm
+import pdb
+
 ###############################################################################
 #
 #	anomalies() is used to convert between mean, eccentric, and true anomaly
@@ -478,9 +486,7 @@ def pqw2ijk (OMEGA, omega, i):
 #		r_ijk: position vector
 #		v_ijk: velocity vector
 #------------------------------------------------------------------
-def coe2rv (a, e, i, OMEGA, omega, nu, **kwargs):
-	import sys
-	from util import rx, rz
+def coe2rv(a, e, i, OMEGA, omega, nu, **kwargs):
 	#accept kwarg input for mu. If none is used, use that of Earth
 	#with a satellite of negligably small mass in km^3/s^2
 	try:
@@ -488,35 +494,64 @@ def coe2rv (a, e, i, OMEGA, omega, nu, **kwargs):
 	except:
 		mu = 398600.4415
 
-	import numpy as np 
-	i = np.deg2rad(i)
-	OMEGA = np.deg2rad(OMEGA)
-	omega = np.deg2rad(omega)
-	nu = np.deg2rad(nu)
+	i = deg2rad(i)
+	OMEGA = deg2rad(OMEGA)
+	omega = deg2rad(omega)
+	nu = deg2rad(nu)
 	#define semipameter
 	p = a*(1-e**2)
 
+	try:
+		length = len(i)
+	except:
+		length = 1
+
 	#define r in the perifocal plane
-	r_pqw = np.vstack([ \
-	((p*np.cos(nu))/(1+e*np.cos(nu))),
-	((p*np.sin(nu))/(1+e*np.cos(nu))),
-	np.zeros(1)
-	])
+	r_pqw = vstack([
+		((p*cos(nu))/(1+e*cos(nu))),
+		((p*sin(nu))/(1+e*cos(nu))),
+		zeros(length)
+		])
 
 	#define v in the perifocal plane
-	v_pqw = np.vstack([ \
-	(-np.sqrt(mu/p)*np.sin(nu)).tolist(),
-	(np.sqrt(mu/p)*(e+np.cos(nu))).tolist(),
-	np.zeros(1).tolist()
-	])
+	v_pqw = vstack([
+		(-sqrt(mu/p)*sin(nu)),
+		(sqrt(mu/p)*(e+cos(nu))),
+		zeros(length)
+		])
 
+	if length == 1:
+		pqw2ijk = rz(-OMEGA).dot(rx(-i).dot(rz(-omega)))
+		r_ijk = pqw2ijk.dot(r_pqw)
+		v_ijk = pqw2ijk.dot(v_pqw)
+		X_ijk = vstack([r_ijk,v_ijk]).T[0]
+	else:
+		#keeping the code for how I used to do it in case the
+		#einsum version goes bonkers
 
-	pqw2ijk = rz(-OMEGA).dot(rx(-i).dot(rz(-omega)))
+		# output = empty((0,6),float)
+		# for j in range(0,length):
+		# 	pqw2ijk = rz(-OMEGA[j]).dot(rx(-i[j]).dot(rz(-omega[j])))
+		# 	r_ijk = pqw2ijk.dot(r_pqw[:,j])
+		# 	v_ijk = pqw2ijk.dot(v_pqw[:,j])
+		# 	X_ijk = hstack([r_ijk,v_ijk])
+		# 	output = vstack([output,X_ijk])
 
-	r_ijk = pqw2ijk.dot(r_pqw)
-	v_ijk = pqw2ijk.dot(v_pqw)
+		#this is ugly, but christ is it fast...
+		r_tmp = r_pqw.T.reshape(-1,3,1)
+		r_tmp = einsum('ijk,ikj->ji',rz(-omega),r_tmp).T.reshape(-1,3,1)
+		r_tmp = einsum('ijk,ikj->ji',rx(-i),r_tmp).T.reshape(-1,3,1)
+		r_ijk = einsum('ijk,ikj->ji',rz(-OMEGA),r_tmp)
 
-	return np.vstack([r_ijk,v_ijk]).T[0]
+		v_tmp = v_pqw.T.reshape(-1,3,1)
+		v_tmp = einsum('ijk,ikj->ji',rz(-omega),v_tmp).T.reshape(-1,3,1)
+		v_tmp = einsum('ijk,ikj->ji',rx(-i),v_tmp).T.reshape(-1,3,1)
+		v_ijk = einsum('ijk,ikj->ji',rz(-OMEGA),v_tmp)
+		X_ijk = vstack([r_ijk,v_ijk]).T
+		#NOTE: Probably could have done this with matmul, too. But at
+		#least this way I learned something about einsum.
+
+	return X_ijk
 
 #------------------------------------------------------------------
 #
@@ -1039,13 +1074,304 @@ def geodetic2geocentric(lat, e):
 #Outputs:
 #	
 #------------------------------------------------------------------
-def lambert(X_0, X_f, dt_0, **kwargs):
-	from numpy import arctan2, dot, sqrt, sin, cos, sinh, cosh, pi
-	from numpy import sqrt, linspace, argmin, rad2deg, nan, array
-	from numpy.linalg import norm
-	import pdb
-	import scipy.linalg as la
 
+def multiLambert(X_0, X_f, dt_0, **kwargs):
+	import pdb
+
+	#accept kwarg input for mu. If none is used, use that of Earth
+	#with a satellite of negligably small mass.
+	try:
+		mu = kwargs['mu']
+	except:
+		mu = 398600.4415 #km^3/s^2
+	
+	try:
+		transferType = kwargs['type']
+	except:
+		transferType = 1
+
+	try:
+		revs = kwargs['revs']
+	except:
+		revs = 0
+
+	try:
+		iterations = kwargs['iterations']
+	except:
+		iterations = 100 #km^3/s^2
+
+	r_0 = X_0[:,0:3]
+	r_f = X_f[:,0:3]
+	r0 = sqrt(X_0[:,0,None]**2+X_0[:,1,None]**2+X_0[:,2,None]**2)
+	n0 = r_0/r0
+	rf = sqrt(X_f[:,0,None]**2+X_f[:,1,None]**2+X_f[:,2,None]**2)
+	nf = r_f/rf
+
+	# n0 = X_0[0:3]/norm(X_0[0:3])
+	# nf = X_f[0:3]/norm(X_f[0:3])
+	# r0 = norm(X_0[0:3])
+	# rf = norm(X_f[0:3])
+	sqrtMu = sqrt(mu)
+####################################################################
+#	Approximate delta nu.
+#
+#	This section assumes that the transfer orbit is in the 
+#	ecliptic. Since we only use it to find DM, it's a good enough
+#	approximation for reasonable transfers.
+#
+####################################################################
+
+	nu_0 = arctan2(n0[:,1],n0[:,0])
+	nu_f = arctan2(nf[:,1],nf[:,0])
+	delta_nu = nu_f - nu_0
+
+	delta_nu[delta_nu < 0] += 2*pi
+	delta_nu[delta_nu > 2*pi] -= 2*pi
+	# if delta_nu < 0:
+	# 	delta_nu += 2*pi
+	# if delta_nu > 2*pi:
+	# 	delta_nu -= 2*pi
+
+	try:
+		DM = kwargs['DM']
+	except:
+		DM = zeros(len(delta_nu)) - 1
+		DM[delta_nu < pi] = 1
+		DM = DM.reshape(-1,1)
+		# if abs(delta_nu) < pi:
+		# 	DM = 1
+		# else:
+		# 	DM = -1
+
+	#this delta nu is NOT an approximiation 
+	#since it uses the dot product
+
+	#it's ugly, but I think it's right
+	
+	
+	cos_delta_nu = sum((n0*nf).T).reshape(-1,1)
+
+	A = DM * sqrt(r0*rf*(1+cos_delta_nu))
+
+	canBeSolved = zeros(len(delta_nu)).reshape(-1,1)
+
+	#if delta_nu or A == 0, flag as cannot be solved
+	canBeSolved[delta_nu == 0] = -1
+	canBeSolved[A == 0] = -1
+	# if delta_nu == 0 or A == 0:
+	# 	print('Trajectory Cannot be Computed')
+	# 	return
+
+
+
+	#This block of commented-out code is stuff from the single lambert
+	#funciton. It's only necessary if we're doing a multi-rev solution
+	#ATM, I have no reason to do multi rev solutions with the multi
+	#lambert, so I'm leaving it out. I will leave the commented out
+	#lines in though, so I have them as a starting point if I decide
+	#that I need to do multirev in multiLambert
+
+	# if revs == 0:
+	# 	psi = 0
+	# 	psi_up = 4*pi**2
+	# 	psi_low = -4*pi**2
+	# else:
+	# 	psi_up = (2*(revs + 1)*pi)**2 - 0.01
+	# 	psi_low = (2*revs*pi)**2 + 0.01
+	# 	psi = (psi_up + psi_low)/2
+
+	# 	#define a function for calculating TOF from psi quickly
+	# 	def TOF(psi):
+	# 		sqrtPsi = sqrt(psi)
+	# 		c2 = (1 - cos(sqrtPsi))/psi
+	# 		sqrtC2 = sqrt(c2)
+	# 		c3 = (sqrtPsi - sin(sqrtPsi))/sqrtPsi**3
+	# 		y = r0 + rf + A*(psi*c3-1)/sqrtC2
+	# 		xi = sqrt(y/c2)
+	# 		sqrtY = sqrt(y)
+	# 		TOF = (xi**3*c3+A*sqrtY)/sqrtMu
+	# 		return TOF
+
+	# 	#find psi associated with minimum TOF so we know where the
+	# 	#cutoff between type III and type IV is
+	# 	testPsi = linspace(psi_low + 0.01,psi_up - 0.01,15)
+	# 	testTOF = TOF(testPsi)
+	# 	sortTOF = sorted(testTOF)
+	# 	while sortTOF[1] - sortTOF[0] > 1e-6:
+	# 		testPsi = linspace(
+	# 			testPsi[argmin(testTOF)-1],
+	# 			testPsi[argmin(testTOF)+1],
+	# 			15)
+	# 		testTOF = TOF(testPsi)
+	# 		sortTOF = sorted(testTOF)
+	# 		minimizingPsi = testPsi[argmin(testTOF)]
+	# 		# print(testTOF - min(testTOF))
+
+	# 	minimumTOF = TOF(minimizingPsi)
+		
+	# 	#if there are no solutions for this TOF, exit the function
+	# 	#and return values so the thing calling this doesn't break
+	# 	if minimumTOF > dt_0:
+	# 		return \
+	# 			{ 
+	# 				'v_0' : nan,
+	# 				'v_f': nan,
+	# 				'DM': nan,
+	# 				'vInfDepart': array([nan,nan,nan]),
+	# 				'vInfArrive': array([nan,nan,nan]),
+	# 				'magVInfArrive': nan,
+	# 				'C3': nan,
+	# 				'delta_nu': nan,
+	# 				'i': nan,
+	# 				'psi': nan,
+	# 				'minTOF': minimumTOF,
+	# 				'minimizingPsi': minimizingPsi
+	# 			}			
+
+
+	# 	if transferType == 3:
+	# 		psi_up = minimizingPsi
+	# 	else:
+	# 		psi_low = minimizingPsi
+
+	# 	psi = (psi_low + psi_up)/2
+		
+	#initialize dt to make sure we always walk through the loop
+	c2 = zeros(len(canBeSolved)).reshape(-1,1) + 1./2.
+	c3 = zeros(len(canBeSolved)).reshape(-1,1) +  1./6.
+	psi = zeros(len(canBeSolved)).reshape(-1,1) 
+	psi_up = zeros(len(canBeSolved)).reshape(-1,1) + 4*pi**2
+	psi_low = zeros(len(canBeSolved)).reshape(-1,1) - 4*pi**2
+
+	dt_0 = dt_0.reshape(-1,1)
+	dt = zeros(len(canBeSolved)).reshape(-1,1) + dt_0+0.0001
+	
+
+	i = 0
+
+	if transferType == 3:
+		def dtCheck(dt,dt_0):
+			return dt >= dt_0
+	else:
+		def dtCheck(dt,dt_0):
+			return dt <= dt_0
+
+	ind = DM != 0
+	while max(abs(dt - dt_0)) > 1e-6 and i<iterations:
+		i += 1
+
+		ind = abs(dt - dt_0) > 1e-6
+		sqrtC2 = sqrt(c2)
+		y = r0 + rf + A*(psi*c3 - 1)/sqrtC2
+		
+		# if A > 0 and y < 0:
+		# 	while y < 0:
+		# 		psi = psi + 0.1
+		# 		y = r0 + rf + A*(psi*c3 - 1)/sqrtC2
+
+		if sum(logical_and(A > 0, y < 0)) > 0:
+			while min(y) < 0:
+				psi[y < 0] += 0.1
+				y[y < 0] = r0 + rf + A*(psi*c3 - 1)/sqrtC2
+		# o.multiLambert(earthState,marsState,TOFs,mu=sun.mu)
+		# o.multiLambert(earthState[0:1],marsState[0:1],TOFs[0:1],mu=sun.mu)
+		# o.multiLambert(earthState[1:2],marsState[0:2],TOFs[1:2],mu=sun.mu)
+		# o.lambert(earthState[0],marsState[0],TOFs[0],mu=sun.mu)
+
+		sqrtY = sqrt(y)
+		xi = sqrtY/sqrtC2
+		dt = (xi**3*c3+A*sqrtY)/sqrtMu
+
+		
+		check = dtCheck(dt,dt_0)
+		psi_low[check] = psi[check]
+		psi_up[~check] = psi[~check]
+		# if dtCheck(dt,dt_0):
+		# 	psi_low = psi
+		# else:
+		# 	psi_up = psi
+		psi = (psi_up + psi_low)/2.
+
+		sqrtPsi = sqrt(psi[psi > 1e-6])
+		c2[psi > 1e-6] = (1-cos(sqrtPsi))/psi[psi > 1e-6]
+		c3[psi > 1e-6] = (sqrtPsi-sin(sqrtPsi))/sqrtPsi**3
+		
+		sqrtPsi = sqrt(-psi[psi < -1e-6])
+		c2[psi < -1e-6] = (1-cosh(sqrtPsi))/psi[psi < -1e-6]
+		c3[psi < -1e-6] = (sqrtPsi-sinh(sqrtPsi))/sqrtPsi**3
+
+		c2[logical_and(c2 > -1e-6,c2 < 1e-6)] = 1./2.
+		c3[logical_and(c3 > -1e-6,c3 < 1e-6)] = 1./6.
+
+		# yFinished = y[abs(dt - dt_0) <= 1e-6]
+		# r0Finished = r0[abs(dt - dt_0) <= 1e-6]
+		# rfFinished = rf[abs(dt - dt_0) <= 1e-6]
+
+		# if psi > 1e-6:
+		# 	sqrtPsi = sqrt(psi)
+		# 	c2 = (1-cos(sqrtPsi))/psi
+		# 	c3 = (sqrtPsi-sin(sqrtPsi))/sqrtPsi**3
+
+		# elif psi < -1e-6:
+		# 	sqrtNegPsi = sqrt(-psi)
+		# 	c2 = (1-cosh(sqrtNegPsi))/psi
+		# 	c3 = (sinh(sqrtNegPsi)-sqrtNegPsi)/sqrtNegPsi**3
+		
+		# else:
+		# 	c2 = 1./2.
+		# 	c3 = 1./6.
+
+	if i == iterations: print("max iterations reached")
+
+	f = 1 - y/r0
+	g_dot = 1 - y/rf
+	g = A*sqrtY/sqrtMu
+
+	v_0 = (rf*nf - f*r0*n0)/g
+	v_f = (g_dot*rf*nf - r0*n0)/g
+
+	# try:
+	# 	minTOF = TOF(minimizingPsi)
+	# except:
+	# 	minTOF = nan
+	# 	minimizingPsi = nan
+	vInfDepart = v_0 - X_0[:,3:6]
+	vInfArrive = v_f - X_f[:,3:6]
+	magVInfArrive = sqrt(sum((vInfArrive**2).T))
+	C3 = sum((vInfDepart**2).T)
+	return \
+		{ 
+			'v_0' : v_0,
+			'v_f': v_f,
+			'DM': DM,
+			'vInfDepart': vInfDepart,
+			'vInfArrive': vInfArrive,
+			'magVInfArrive': magVInfArrive,
+			'C3': C3,
+			'delta_nu': delta_nu,
+			'i': i,
+			'psi': psi,
+		}
+
+#------------------------------------------------------------------
+# lambert() 
+#
+#Reference: 
+#	http://ccar.colorado.edu/imd/2015/documents/LambertHandout.pdf
+#
+#Inputs:
+#	X_0: initial state vector; velocities required to calculate C3
+#		and vInf
+#	X_f: final state vector; velocities required to calculate C3
+#		and vInf
+#	dt_0: transfer time in seconds
+#keywords:
+#	DM: direction of motion (if you want to force it. It is 
+#		nominaly calculated by the script.)
+#Outputs:
+#	
+#------------------------------------------------------------------
+def lambert(X_0, X_f, dt_0, **kwargs):
 	#accept kwarg input for mu. If none is used, use that of Earth
 	#with a satellite of negligably small mass.
 	try:
@@ -1142,7 +1468,7 @@ def lambert(X_0, X_f, dt_0, **kwargs):
 			testTOF = TOF(testPsi)
 			sortTOF = sorted(testTOF)
 			minimizingPsi = testPsi[argmin(testTOF)]
-			# print(testTOF - min(testTOF))
+
 
 		minimumTOF = TOF(minimizingPsi)
 		
@@ -1221,7 +1547,7 @@ def lambert(X_0, X_f, dt_0, **kwargs):
 		else:
 			c2 = 1./2.
 			c3 = 1./6.
-	
+
 	if i == 1000: print("max iterations reached")
 
 	f = 1 - y/r0
