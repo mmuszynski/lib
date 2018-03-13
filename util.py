@@ -25,6 +25,7 @@
 ###############################################################################
 
 from numpy import deg2rad, outer, linspace, sin, cos, ones, vstack, size
+from numpy import zeros, arange, hstack
 from numpy import meshgrid, asarray
 
 ###############################################################################
@@ -146,84 +147,98 @@ def block_diag(in_mat):
 # )	
 
 def rx (theta):
-	from numpy import cos, sin, zeros, arange
-	try:
-		rx = zeros((3,3*len(theta)))
-		helper = arange(3*3*len(theta)).reshape(3,3*len(theta))
-	except:
-		rx = zeros((3,3))
-		helper = arange(3*3).reshape(3,3)
-
-	rx[0][helper[0]%3 == 0] =  1
-	rx[1][helper[0]%3 == 1] =  cos(theta)
-	rx[1][helper[0]%3 == 2] =  sin(theta)
-	rx[2][helper[0]%3 == 1] = -sin(theta)
-	rx[2][helper[0]%3 == 2] =  cos(theta)
 
 	try:
-		rx = rx.reshape((3,3*len(theta)))
+		length = len(theta)
+		zero = zeros(length)
+		one = ones(length)
 	except:
-		rx = rx.reshape(3,3)
+		length = 1
+		zero = 0
+		one = 1
 
+	rx00 =  one
+	rx01 =  zero
+	rx02 =  zero
+	rx10 =  zero
+	rx11 =  cos(theta)
+	rx12 =  sin(theta)
+	rx20 =  zero
+	rx21 = -sin(theta)
+	rx22 =  cos(theta)
+
+
+	if length == 1:
+		rx = hstack(
+			[rx00,rx01,rx02,rx10,rx11,rx12,rx20,rx21,rx22]
+			).reshape(3,3)
+	else:
+		rx = vstack(
+			[rx00,rx01,rx02,rx10,rx11,rx12,rx20,rx21,rx22]
+			).T.reshape(length,3,3)
 	return rx
 
-# ry =  np.matrix( \
-# [ \
-# [np.cos(theta), 0., -np.sin(theta)], \
-# [0.,            1.,  0.           ], \
-# [np.sin(theta), 0., np.cos(theta)]  \
-# ] \
-# )	
 
 def ry(theta):
-	from numpy import cos, sin, zeros, arange
-	try:
-		ry = zeros((3,3*len(theta)))
-		helper = arange(3*3*len(theta)).reshape(3,3*len(theta))
-	except:
-		ry = zeros((3,3))
-		helper = arange(3*3).reshape(3,3)
-
-	ry[0][helper[0]%3 == 0] =  cos(theta)
-	ry[0][helper[0]%3 == 2] = -sin(theta)
-	ry[1][helper[0]%3 == 1] =  1
-	ry[2][helper[0]%3 == 0] =  sin(theta)
-	ry[2][helper[0]%3 == 2] =  cos(theta)
 
 	try:
-		ry = ry.reshape((3,3*len(theta)))
+		length = len(theta)
+		zero = zeros(length)
+		one = ones(length)
 	except:
-		ry = ry.reshape(3,3)
+		length = 1
+		zero = 0
+		one = 1
 
+	ry00 =  cos(theta)
+	ry01 =  zero
+	ry02 = -sin(theta)
+	ry10 =  zero
+	ry11 =  one
+	ry12 =  zero
+	ry20 =  sin(theta)
+	ry21 =  zero
+	ry22 =  cos(theta)
+
+	if length == 1:
+		ry = hstack(
+			[ry00,ry01,ry02,ry10,ry11,ry12,ry20,ry21,ry22]
+			).reshape(3,3)
+	else:
+		ry = vstack(
+			[ry00,ry01,ry02,ry10,ry11,ry12,ry20,ry21,ry22]
+			).T.reshape(length,3,3)
 	return ry
 
-# rz = np.matrix( \
-# [ \
-# [ np.cos(theta),   np.sin(theta), 0.], \
-# [-np.sin(theta),   np.cos(theta), 0.], \
-# [ 0.,                0.,             1.]  \
-# ] \
-# )
-
 def rz (theta):
-	from numpy import cos, sin, zeros, arange
-	try:
-		rz = zeros((3,3*len(theta)))
-		helper = arange(3*3*len(theta)).reshape(3,3*len(theta))
-	except:
-		rz = zeros((3,3))
-		helper = arange(3*3).reshape(3,3)
-
-	rz[0][helper[0]%3 == 0] =  cos(theta)
-	rz[0][helper[0]%3 == 1] =  sin(theta)
-	rz[1][helper[0]%3 == 0] = -sin(theta)
-	rz[1][helper[0]%3 == 1] =  cos(theta)
-	rz[2][helper[0]%3 == 2] =  1
 
 	try:
-		rz = rz.reshape((3,3*len(theta)))
+		length = len(theta)
+		zero = zeros(length)
+		one = ones(length)
 	except:
-		rz = rz.reshape(3,3)
+		length = 1
+		zero = 0
+		one = 1
+
+	rz00 =  cos(theta)
+	rz01 =  sin(theta)
+	rz02 =  zero
+	rz10 = -sin(theta)
+	rz11 =  cos(theta)
+	rz12 =  zero
+	rz20 =  zero
+	rz21 =  zero
+	rz22 =  one
+
+	if length == 1:
+		rz = hstack(
+			[rz00,rz01,rz02,rz10,rz11,rz12,rz20,rz21,rz22]
+			).reshape(3,3)
+	else:
+		rz = vstack(
+			[rz00,rz01,rz02,rz10,rz11,rz12,rz20,rz21,rz22]
+			).T.reshape(length,3,3)
 	return rz
 
 def r1 (theta):
